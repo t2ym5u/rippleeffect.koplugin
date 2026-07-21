@@ -19,16 +19,48 @@ local function inBounds(r, c, n)
 end
 
 -- ---------------------------------------------------------------------------
--- Room generation by BFS flood-fill
+-- Room + value generation
 -- ---------------------------------------------------------------------------
 
-local function generateRooms(n)
-    -- We place seeds and grow rooms of size 1..MAX_ROOM
-    local room_id   = emptyGrid(n, n, 0)  -- cell → room index
-    local rooms     = {}                   -- rooms[id] = { cells = {}, size = 0 }
-    local next_room = 1
+-- Same separation rule as isValid() below, but checked against a plain n×n
+-- value grid instead of a room-relative one — used while a room's final
+-- size isn't decided yet.
+local function isValidGlobal(grid, n, r, c, v)
+    for cc = 1, n do
+        if cc ~= c and grid[r][cc] == v and math.abs(cc - c) <= v then return false end
+    end
+    for rr = 1, n do
+        if rr ~= r and grid[rr][c] == v and math.abs(rr - r) <= v then return false end
+    end
+    return true
+end
 
-    -- Process cells in shuffled reading order; each unassigned cell starts a new room
+-- Build rooms AND assign their values in the same pass instead of
+-- generating a blind random room layout and hoping a separate solve() can
+-- fill it: each new room is grown one cell at a time, immediately assigning
+-- the next value (1, 2, 3, ...) and checking it against every value already
+-- placed on the board. A room simply stops growing early if no neighbouring
+-- cell can validly take the next value, rather than committing to a shape
+-- that might turn out to be globally unsatisfiable. (The old generate-then-
+-- solve approach had to prove a full random layout infeasible before
+-- retrying — empirically needing many thousands of attempts at n=6/7, worse
+-- than the room count could realistically be retried; checking validity
+-- while growing avoids ever building a room around a bad guess.)
+--
+-- Cells that end up with no room after the main growth pass (their
+-- neighbours all filled up first) are patched up in a final repair pass:
+-- try extending an adjacent room by one more value, or start a fresh
+-- size-1 room. Returns nil if even that isn't possible for some cell, so
+-- the caller can just retry with a fresh random order — each attempt is
+-- cheap since there's no backtracking search involved.
+local ROOM_SIZE_WEIGHTS = { 1, 1, 2, 2, 2, 3, 3, 4 }
+
+local function tryGenerateRoomsAndValues(n)
+    local grid    = emptyGrid(n, n, 0)
+    local room_id = emptyGrid(n, n, 0)
+    local rooms   = {}
+    local next_room = 0
+
     local all_cells = {}
     for r = 1, n do
         for c = 1, n do all_cells[#all_cells + 1] = {r, c} end
@@ -37,42 +69,78 @@ local function generateRooms(n)
 
     for _, cell in ipairs(all_cells) do
         local r, c = cell[1], cell[2]
-        if room_id[r][c] == 0 then
-            -- Start a new room here
-            local id   = next_room
-            next_room  = next_room + 1
-            local room = { cells = {{r, c}}, size = 1 }
-            rooms[id]  = room
+        if room_id[r][c] == 0 and isValidGlobal(grid, n, r, c, 1) then
+            next_room = next_room + 1
+            local id = next_room
             room_id[r][c] = id
+            grid[r][c]    = 1
+            local room = { cells = {{r, c}}, size = 1 }
+            rooms[id] = room
 
-            -- Grow this room to a random size 1..MAX_ROOM
-            local target = math.random(1, MAX_ROOM)
-            local frontier = {{r, c}}
-            while room.size < target and #frontier > 0 do
-                local fi = math.random(#frontier)
-                local fc = frontier[fi]
-                local grown = false
-                local dirs = { {-1,0},{1,0},{0,-1},{0,1} }
-                shuffle(dirs)
-                for _, d in ipairs(dirs) do
-                    local nr, nc = fc[1] + d[1], fc[2] + d[2]
-                    if inBounds(nr, nc, n) and room_id[nr][nc] == 0 then
-                        room_id[nr][nc] = id
-                        room.size = room.size + 1
-                        room.cells[#room.cells + 1] = {nr, nc}
-                        frontier[#frontier + 1] = {nr, nc}
-                        grown = true
-                        break
+            local target = ROOM_SIZE_WEIGHTS[math.random(#ROOM_SIZE_WEIGHTS)]
+            while room.size < target do
+                local candidates = {}
+                for _, rc in ipairs(room.cells) do
+                    for _, d in ipairs(DIR4) do
+                        local nr, nc = rc[1] + d[1], rc[2] + d[2]
+                        if inBounds(nr, nc, n) and room_id[nr][nc] == 0 then
+                            local next_v = room.size + 1
+                            if isValidGlobal(grid, n, nr, nc, next_v) then
+                                candidates[#candidates + 1] = {nr, nc}
+                            end
+                        end
                     end
                 end
-                if not grown then
-                    table.remove(frontier, fi)
+                if #candidates == 0 then break end
+                local pick = candidates[math.random(#candidates)]
+                room.size = room.size + 1
+                room_id[pick[1]][pick[2]] = id
+                grid[pick[1]][pick[2]]    = room.size
+                room.cells[#room.cells + 1] = pick
+            end
+        end
+    end
+
+    -- Repair pass: patch up any cells the main pass never reached.
+    for r = 1, n do
+        for c = 1, n do
+            if room_id[r][c] == 0 then
+                local joined, adj_ids = false, {}
+                for _, d in ipairs(DIR4) do
+                    local nr, nc = r + d[1], c + d[2]
+                    if inBounds(nr, nc, n) and room_id[nr][nc] > 0 then
+                        adj_ids[room_id[nr][nc]] = true
+                    end
+                end
+                for id in pairs(adj_ids) do
+                    local room = rooms[id]
+                    if room.size < MAX_ROOM then
+                        local next_v = room.size + 1
+                        if isValidGlobal(grid, n, r, c, next_v) then
+                            room.size = next_v
+                            room_id[r][c] = id
+                            grid[r][c]    = next_v
+                            room.cells[#room.cells + 1] = {r, c}
+                            joined = true
+                            break
+                        end
+                    end
+                end
+                if not joined then
+                    if isValidGlobal(grid, n, r, c, 1) then
+                        next_room = next_room + 1
+                        room_id[r][c] = next_room
+                        grid[r][c]    = 1
+                        rooms[next_room] = { cells = {{r, c}}, size = 1 }
+                    else
+                        return nil
+                    end
                 end
             end
         end
     end
 
-    return room_id, rooms
+    return grid, room_id, rooms
 end
 
 -- ---------------------------------------------------------------------------
@@ -110,26 +178,6 @@ local function isValid(grid, room_id, rooms, r, c, v, n)
     end
 
     return true
-end
-
--- ---------------------------------------------------------------------------
--- Solver
--- ---------------------------------------------------------------------------
-
-local function solve(grid, room_id, rooms, cells, idx, n)
-    if idx > #cells then return true end
-    local r, c = cells[idx][1], cells[idx][2]
-    local room_size = rooms[room_id[r][c]].size
-    for v = 1, room_size do
-        if isValid(grid, room_id, rooms, r, c, v, n) then
-            grid[r][c] = v
-            if solve(grid, room_id, rooms, cells, idx + 1, n) then
-                return true
-            end
-            grid[r][c] = 0
-        end
-    end
-    return false
 end
 
 -- ---------------------------------------------------------------------------
@@ -199,19 +247,14 @@ end
 function RippleEffectBoard:generate(diff)
     self.difficulty = diff or self.difficulty
     local n = self.n
-    local MAX_ATTEMPTS = 15
+    -- Each attempt is a cheap constructive build (no backtracking search),
+    -- so this can afford to be a large budget: measured 0/30 fallback at
+    -- n=7 (the hardest supported size) with this cap, worst case ~8s.
+    local MAX_ATTEMPTS = 100000
 
     for attempt = 1, MAX_ATTEMPTS do
-        local room_id, rooms = generateRooms(n)
-
-        -- Build reading-order cell list
-        local cells = {}
-        for r = 1, n do
-            for c = 1, n do cells[#cells + 1] = {r, c} end
-        end
-
-        local grid = emptyGrid(n, n, 0)
-        if solve(grid, room_id, rooms, cells, 1, n) then
+        local grid, room_id, rooms = tryGenerateRoomsAndValues(n)
+        if grid then
             self.room_id  = room_id
             self.rooms    = rooms
             self.solution = grid

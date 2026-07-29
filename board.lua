@@ -184,6 +184,78 @@ end
 -- Clue removal
 -- ---------------------------------------------------------------------------
 
+-- Counts solutions (up to `limit`) of the room+ripple-rule instance given
+-- the current puzzle's fixed cells, using MRV cell ordering. Returns
+-- (solutions_found, exhausted); exhausted=true means node_budget was hit
+-- before the search concluded, so the count isn't proof. Mirrors
+-- sudokukiller.koplugin/board.lua's countCageSolutions.
+local NODE_BUDGET_UNIQUENESS = 200000
+
+local function countSolutions(puzzle, room_id, rooms, n, limit, node_budget)
+    local grid = {}
+    for r = 1, n do
+        grid[r] = {}
+        for c = 1, n do grid[r][c] = puzzle[r][c] end
+    end
+
+    local solutions, nodes, exhausted = 0, 0, false
+
+    local function isValid(r, c, v)
+        local id = room_id[r][c]
+        local room = rooms[id]
+        if v > room.size then return false end
+        for _, cell in ipairs(room.cells) do
+            local cr, cc = cell[1], cell[2]
+            if not (cr == r and cc == c) and grid[cr][cc] == v then return false end
+        end
+        for cc = 1, n do
+            if cc ~= c and grid[r][cc] == v and math.abs(cc - c) <= v then return false end
+        end
+        for rr = 1, n do
+            if rr ~= r and grid[rr][c] == v and math.abs(rr - r) <= v then return false end
+        end
+        return true
+    end
+
+    local empties = {}
+    for r = 1, n do for c = 1, n do if grid[r][c] == 0 then empties[#empties + 1] = { r = r, c = c } end end end
+
+    local function candidatesFor(r, c)
+        local room = rooms[room_id[r][c]]
+        local cands = {}
+        for v = 1, room.size do if isValid(r, c, v) then cands[#cands + 1] = v end end
+        return cands
+    end
+
+    local function search(depth)
+        if solutions >= limit or exhausted then return end
+        nodes = nodes + 1
+        if nodes > node_budget then exhausted = true; return end
+        if depth > #empties then solutions = solutions + 1; return end
+        local best_idx, best_cands, best_len = nil, nil, 1000
+        for i, cell in ipairs(empties) do
+            if grid[cell.r][cell.c] == 0 then
+                local cands = candidatesFor(cell.r, cell.c)
+                if #cands < best_len then
+                    best_len, best_cands, best_idx = #cands, cands, i
+                    if best_len <= 1 then break end
+                end
+            end
+        end
+        if best_idx == nil then solutions = solutions + 1; return end
+        if best_len == 0 then return end
+        local cell = empties[best_idx]
+        for _, v in ipairs(best_cands) do
+            grid[cell.r][cell.c] = v
+            search(depth + 1)
+            grid[cell.r][cell.c] = 0
+            if solutions >= limit or exhausted then return end
+        end
+    end
+    search(1)
+    return solutions, exhausted
+end
+
 local function removeClues(solution, room_id, rooms, n, difficulty)
     local keep_ratio
     if     difficulty == "easy"   then keep_ratio = 0.55
@@ -198,21 +270,30 @@ local function removeClues(solution, room_id, rooms, n, difficulty)
         end
     end
 
-    -- Try to remove cells while puzzle remains uniquely solvable (simplified:
-    -- just remove a fraction of cells randomly)
+    -- Dig cells one at a time (like sudoku-common's hole-digging),
+    -- verifying with countSolutions after each tentative removal and
+    -- putting the cell back if that broke uniqueness -- the old "just
+    -- remove a fraction of cells randomly" approach never checked this
+    -- (see docs/generator_robustness_audit.md's Tier 2 table: measured
+    -- moderate ambiguity, worsening with size/difficulty).
     local removable = {}
     for r = 1, n do
-        for c = 1, n do removable[#removable + 1] = {r, c} end
+        for c = 1, n do removable[#removable + 1] = { r, c } end
     end
     shuffle(removable)
-    local total = n * n
-    local to_keep = math.floor(total * keep_ratio)
-    local kept = 0
+    local total      = n * n
+    local target_remove = total - math.floor(total * keep_ratio)
+    local removed = 0
     for _, cell in ipairs(removable) do
-        if kept < to_keep then
-            kept = kept + 1
+        if removed >= target_remove then break end
+        local r, c = cell[1], cell[2]
+        local saved = puzzle[r][c]
+        puzzle[r][c] = 0
+        local solutions, exhausted = countSolutions(puzzle, room_id, rooms, n, 2, NODE_BUDGET_UNIQUENESS)
+        if not exhausted and solutions == 1 then
+            removed = removed + 1
         else
-            puzzle[cell[1]][cell[2]] = 0
+            puzzle[r][c] = saved
         end
     end
     return puzzle

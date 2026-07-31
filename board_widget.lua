@@ -16,7 +16,7 @@ local C_LINE     = Blitbuffer.COLOR_BLACK
 local C_GRID     = Blitbuffer.COLOR_GRAY_9
 local C_GIVEN_BG = Blitbuffer.COLOR_GRAY_E
 local C_SEL_BG   = Blitbuffer.COLOR_GRAY_D
-local C_WRONG_BG = Blitbuffer.COLOR_GRAY_A
+local C_WRONG_BG = Blitbuffer.COLOR_GRAY
 local C_NUM      = Blitbuffer.COLOR_BLACK
 local C_USER_NUM = Blitbuffer.COLOR_GRAY_4
 

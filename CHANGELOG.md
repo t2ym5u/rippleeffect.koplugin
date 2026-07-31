@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.12] - 2026-07-31
+
+### Fixed
+- `board_widget.lua` referenced Blitbuffer color constants that don't
+  exist (COLOR_GRAY_A), which evaluated to `nil` and crashed the
+  color-comparison in `paintTo()` as soon as the corresponding
+  highlight was drawn. Now uses the correct constant name(s)
+  (COLOR_GRAY).
+
 ## [1.1.9] - 2026-07-29
 
 ### Fixed

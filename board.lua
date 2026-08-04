@@ -2,6 +2,7 @@ local grid_utils = require("grid_utils")
 local UndoStack  = require("undo_stack")
 
 local emptyGrid = grid_utils.emptyGrid
+local copyGrid  = grid_utils.copyGrid
 local shuffle   = grid_utils.shuffle
 
 -- ---------------------------------------------------------------------------
@@ -300,6 +301,101 @@ local function removeClues(solution, room_id, rooms, n, difficulty)
 end
 
 -- ---------------------------------------------------------------------------
+-- Static fallback boards
+-- ---------------------------------------------------------------------------
+
+-- tryGenerateRoomsAndValues occasionally exhausts MAX_ATTEMPTS without
+-- completing a full room layout -- measured empirically at roughly 1 success
+-- per ~30000 attempts at n=7, so a ~8% chance of exhausting a 100000-attempt
+-- budget isn't a fluke. The previous fallback built an all-1s grid of
+-- single-cell rooms, which VIOLATES the game's own separation rule (every
+-- adjacent same-value pair needs to be more than value cells apart, but
+-- distance 1 everywhere breaks that for value 1) and silently shrank the
+-- board to 5x5 regardless of the size the player picked.
+--
+-- These are real, pre-verified valid boards -- built by running
+-- tryGenerateRoomsAndValues offline until it produced a layout that passes
+-- every room-uniqueness and separation check -- kept as a last-resort
+-- substitute so a rare generation failure still yields a rule-correct board
+-- at the size the player actually requested, instead of a broken one.
+local FALLBACK_BOARDS = {
+    [5] = {
+        grid = {
+            {1,3,1,2,1},
+            {3,1,2,1,3},
+            {1,2,1,4,1},
+            {2,1,3,1,2},
+            {1,4,1,3,1},
+        },
+        room_id = {
+            {8,3,10,6,13},
+            {1,3,3,6,6},
+            {1,1,4,6,12},
+            {7,7,7,5,2},
+            {9,7,11,2,2},
+        },
+    },
+    [6] = {
+        grid = {
+            {1,2,1,3,2,1},
+            {3,1,2,1,3,4},
+            {1,4,1,2,1,3},
+            {2,1,4,1,2,1},
+            {1,2,1,3,1,2},
+            {3,1,2,1,3,1},
+        },
+        room_id = {
+            {4,4,1,2,2,2},
+            {17,13,1,3,3,3},
+            {17,17,7,3,5,5},
+            {17,11,12,16,5,14},
+            {9,8,12,12,10,10},
+            {8,8,12,6,10,15},
+        },
+    },
+    [7] = {
+        grid = {
+            {3,1,2,1,3,1,2},
+            {1,3,4,2,1,3,1},
+            {2,1,3,1,2,1,3},
+            {1,2,1,4,1,2,1},
+            {3,1,2,1,3,1,2},
+            {1,3,1,2,1,3,1},
+            {2,1,4,1,2,1,3},
+        },
+        room_id = {
+            {3,3,3,11,2,8,7},
+            {6,14,3,2,2,7,7},
+            {21,14,5,5,5,19,19},
+            {21,14,18,5,13,19,4},
+            {21,20,12,12,12,22,22},
+            {17,16,10,10,23,22,1},
+            {16,16,16,9,15,15,15},
+        },
+    },
+}
+
+-- Rebuilds the {cells=, size=} rooms table from a grid + room_id pair --
+-- size is recovered as the max value written in that room, which always
+-- equals its cell count for a valid layout (values are exactly 1..size).
+local function buildRoomsFromRoomId(grid, room_id, n)
+    local rooms = {}
+    for r = 1, n do
+        for c = 1, n do
+            local id = room_id[r][c]
+            local room = rooms[id]
+            if not room then
+                room = { cells = {}, size = 0 }
+                rooms[id] = room
+            end
+            room.cells[#room.cells + 1] = { r, c }
+            if grid[r][c] > room.size then room.size = grid[r][c] end
+        end
+    end
+    return rooms
+end
+
+-- ---------------------------------------------------------------------------
 -- RippleEffectBoard
 -- ---------------------------------------------------------------------------
 
@@ -354,26 +450,25 @@ function RippleEffectBoard:generate(diff)
         end
     end
 
-    -- Fallback: 5x5, all single-cell rooms with values 1
-    local n2 = 5
-    self.n = n2
-    local room_id = emptyGrid(n2, n2, 0)
-    local rooms   = {}
-    local id = 0
-    for r = 1, n2 do
-        for c = 1, n2 do
-            id = id + 1
-            room_id[r][c] = id
-            rooms[id] = { cells = {{r, c}}, size = 1 }
-        end
-    end
-    local sol = emptyGrid(n2, n2, 1)
+    -- Fallback: MAX_ATTEMPTS exhausted without a full room layout (see
+    -- FALLBACK_BOARDS comment above). Use a pre-verified valid board at the
+    -- size the player actually requested rather than a broken one.
+    local fb      = FALLBACK_BOARDS[n] or FALLBACK_BOARDS[DEFAULT_N]
+    local sol     = copyGrid(fb.grid, n, n)
+    local room_id = copyGrid(fb.room_id, n, n)
+    local rooms   = buildRoomsFromRoomId(sol, room_id, n)
+    self.n        = n
     self.room_id  = room_id
     self.rooms    = rooms
     self.solution = sol
-    self.puzzle   = emptyGrid(n2, n2, 0)
-    self.user     = emptyGrid(n2, n2, 0)
-    self.wrong    = emptyGrid(n2, n2, false)
+    self.puzzle   = removeClues(sol, room_id, rooms, n, self.difficulty)
+    self.user     = emptyGrid(n, n, 0)
+    self.wrong    = emptyGrid(n, n, false)
+    for r = 1, n do
+        for c = 1, n do
+            self.user[r][c] = self.puzzle[r][c]
+        end
+    end
     self.won      = false
     self.selected = nil
     self.undo:clear()

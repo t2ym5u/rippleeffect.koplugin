@@ -16,6 +16,7 @@ Fill every cell so that each outlined region of size N contains 1–N exactly on
 - **Three difficulty levels** — Easy, Medium, Hard
 - **Region highlighting** — outlined regions are clearly shown
 - **Check** — highlights rule violations
+- **Hint** — two taps: the first says which cell is about to give, the second acts on it. A cell that contradicts the solution is always reported before a fresh one is revealed
 - **Auto-save** — puzzle state saved and restored on next launch
 
 ## Installation

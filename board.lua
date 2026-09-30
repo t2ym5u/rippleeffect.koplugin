@@ -1,5 +1,6 @@
 local grid_utils = require("grid_utils")
 local UndoStack  = require("undo_stack")
+local Hint      = require("hint")
 
 local emptyGrid = grid_utils.emptyGrid
 local copyGrid  = grid_utils.copyGrid
@@ -553,6 +554,16 @@ end
 -- ---------------------------------------------------------------------------
 -- Serialization
 -- ---------------------------------------------------------------------------
+
+-- Givens are the non-zero cells of `puzzle`; setCell already refuses those
+-- and accepts 0 as "empty", so no clearCell is needed.
+Hint.install(RippleEffectBoard, {
+    getUser     = function(b, r, c) return b.user[r][c] end,
+    getSolution = function(b, r, c) return b.solution[r][c] end,
+    isGiven     = function(b, r, c) return b.puzzle[r][c] ~= 0 end,
+    setCell     = function(b, r, c, v) return b:setCell(r, c, v) end,
+    blank       = 0,
+})
 
 function RippleEffectBoard:serialize()
     local n = self.n

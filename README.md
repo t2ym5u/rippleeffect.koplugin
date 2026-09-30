@@ -4,7 +4,7 @@ A Ripple Effect puzzle plugin for [KOReader](https://github.com/koreader/koreade
 
 ## Screenshot
 
-*(Screenshot to be added.)*
+![Screenshot](images/rippleeffect.png)
 
 ## Rules
 

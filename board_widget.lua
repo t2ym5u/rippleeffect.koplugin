@@ -88,8 +88,10 @@ function RippleEffectBoardWidget:paintTo(bb, x, y)
 
     for i = 0, n do
         local lw = (i == 0 or i == n) and thick or thin
-        drawLine(bb, x + math.floor(i * cell), y, lw, self.dimen.h, C_LINE)
-        drawLine(bb, x, y + math.floor(i * cell), self.dimen.w, lw, C_LINE)
+        -- The last line is drawn inside the widget, not past its edge.
+        local p  = math.floor(i * cell) - (i == n and lw or 0)
+        drawLine(bb, x + p, y, lw, self.dimen.h, C_LINE)
+        drawLine(bb, x, y + p, self.dimen.w, lw, C_LINE)
     end
 
     -- Thick room borders

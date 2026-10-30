@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-10-30
+
+### Added
+- "Daily Challenge" in the menu, right after "New game": today's puzzle at
+  your size and difficulty, the same grid for everyone playing it today.
+  Needs game-common 1.7.0.
+
 ## [1.3.0] - 2026-10-30
 
 ### Changed

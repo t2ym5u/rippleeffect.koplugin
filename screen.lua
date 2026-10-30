@@ -7,9 +7,6 @@ local function lrequire(name)
     return package.loaded[key]
 end
 
-local Button          = require("ui/widget/button")
-local ButtonTable     = require("ui/widget/buttontable")
-local Device          = require("device")
 local FrameContainer  = require("ui/widget/container/framecontainer")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan  = require("ui/widget/horizontalspan")
@@ -25,8 +22,6 @@ local MenuHelper               = require("menu_helper")
 local RippleEffectBoard        = lrequire("board")
 local RippleEffectBoardWidget  = lrequire("board_widget")
 
-local DeviceScreen = Device.screen
-
 local GAME_RULES_EN = _([[
 Ripple Effect — Rules
 
@@ -36,7 +31,7 @@ Distance constraint:
 • If the same number appears twice in the same row or column, those two cells must be at least that number of cells apart.
   Example: two cells both containing 3 must have at least 3 cells (not counting themselves) between them.
 
-Tap a cell to select it, then tap a digit to fill it in.
+Tap a cell to select it, then tap a digit to fill it in. Long-press a cell to clear it.
 ]])
 
 local GAME_RULES_FR = [[
@@ -48,7 +43,7 @@ Contrainte de distance :
 • Si le même nombre apparaît deux fois dans la même ligne ou colonne, ces deux cases doivent être séparées d'au moins ce nombre de cases.
   Exemple : deux cases contenant toutes les deux le chiffre 3 doivent avoir au moins 3 cases entre elles dans la même ligne ou colonne.
 
-Appuyez sur une case pour la sélectionner, puis sur un chiffre pour le placer.
+Appuyez sur une case pour la sélectionner, puis sur un chiffre pour le placer. Appui long sur une case pour l'effacer.
 ]]
 
 local RippleEffectScreen = ScreenBase:extend{}
@@ -69,28 +64,7 @@ function RippleEffectScreen:serializeState()
 end
 
 function RippleEffectScreen:buildLayout()
-    local sw           = DeviceScreen:getWidth()
     local is_landscape = self:isLandscape()
-
-    self.board_widget = RippleEffectBoardWidget:new{
-        board           = self.board,
-        onCellTap_cb    = function(r, c) self:onCellTap(r, c) end,
-        onCellHold_cb   = function(r, c) self:onCellHold(r, c) end,
-    }
-
-    local board_frame = FrameContainer:new{
-        padding = Size.padding.large,
-        margin  = Size.margin.default,
-        self.board_widget,
-    }
-
-    local board_frame_size  = self.board_widget.size + (Size.padding.large + Size.margin.default) * 2
-    local right_panel_width = sw - board_frame_size - Size.span.horizontal_default
-    local button_width = is_landscape
-        and math.max(right_panel_width - Size.span.horizontal_default, 100)
-        or  math.floor(sw * 0.9)
-
-    self.status_text:setMaxWidth(is_landscape and button_width or board_frame_size)
 
     local title_bar = self:buildTitleBar(_("Ripple Effect"), function()
         return {
@@ -101,65 +75,64 @@ function RippleEffectScreen:buildLayout()
         }
     end)
 
-    -- Digit buttons 1-MAX_ROOM, drawn as real bordered buttons
-    local max_room = RippleEffectBoard.MAX_ROOM
-    local digit_btn_width = math.floor(button_width / max_room)
-    local digit_buttons = HorizontalGroup:new{}
-    for d = 1, max_room do
+    -- Digit pad 1..MAX_ROOM
+    local keys = {}
+    for d = 1, RippleEffectBoard.MAX_ROOM do
         local dv = d
-        local digit_btn = Button:new{
-            text       = tostring(dv),
-            width      = digit_btn_width,
-            margin     = Size.margin.small,
-            bordersize = Size.border.button,
-            radius     = Size.radius.button,
-            padding    = Size.padding.buttontable,
-            callback   = function() self:onDigitKey(dv) end,
-        }
-        table.insert(digit_buttons, digit_btn)
+        keys[#keys + 1] = { id = "digit_" .. d, text = tostring(d),
+                            callback = function() self:onDigitKey(dv) end }
     end
+    local number_pad = self:buildNumberPad(keys)
 
-    local bottom_buttons = ButtonTable:new{
-        shrink_unneeded_width = true,
-        width   = button_width,
-        buttons = {{
-            { text = _("Undo"),   callback = function() self:onUndo() end },
-            { text = _("Erase"),  callback = function() self:onErase() end },
-            { text = _("Check"),  callback = function() self:onCheck() end },
-            { text = _("Hint"), callback = function() self:onHint() end },
-            { text = _("Reveal"), callback = function() self:onReveal() end },
-        }},
+    -- Bottom bar. Five labels do not fit the landscape side panel on one
+    -- row, so there they are split over two.
+    local undo_btn   = { text = _("Undo"),   callback = function() self:onUndo() end }
+    local erase_btn  = { text = _("Erase"),  callback = function() self:onErase() end }
+    local check_btn  = { text = _("Check"),  callback = function() self:onCheck() end }
+    local hint_btn   = { text = _("Hint"),   callback = function() self:onHint() end }
+    local reveal_btn = { text = _("Reveal"), callback = function() self:onReveal() end }
+    local action_bar = self:buildActionBar(is_landscape
+        and { { undo_btn, erase_btn, check_btn }, { hint_btn, reveal_btn } }
+        or  { undo_btn, erase_btn, check_btn, hint_btn, reveal_btn })
+
+    self.status_text:setMaxWidth(self:getControlsWidth())
+    local controls = VerticalGroup:new{
+        align = "center",
+        self.status_text,
+        VerticalSpan:new{ width = Size.span.vertical_large },
+        number_pad,
+        VerticalSpan:new{ width = Size.span.vertical_default },
+        action_bar,
     }
 
-    local footer = VerticalGroup:new{
-        align = "center",
-        digit_buttons,
-        VerticalSpan:new{ width = Size.span.vertical_large },
-        bottom_buttons,
+    -- The widget draws its own outer border, so the frame only pads.
+    local frame_pad = Size.padding.large
+    local budget_w, budget_h = self:getBoardBudget(title_bar, controls)
+    self.board_widget = RippleEffectBoardWidget:new{
+        max_size       = math.min(budget_w, budget_h) - 2 * frame_pad,
+        board          = self.board,
+        selected       = self.selected,
+        onCellTap_cb   = function(r, c) self:onCellTap(r, c) end,
+        onCellHold_cb  = function(r, c) self:onCellHold(r, c) end,
+    }
+    local board_frame = FrameContainer:new{
+        padding    = frame_pad,
+        margin     = 0,
+        bordersize = 0,
+        self.board_widget,
     }
 
     if is_landscape then
-        local right_panel = VerticalGroup:new{
-            align = "center",
-            self.status_text,
-            VerticalSpan:new{ width = Size.span.vertical_large },
-            footer,
-        }
         local content = HorizontalGroup:new{
-            align  = "center",
+            align = "center",
             board_frame,
-            HorizontalSpan:new{ width = Size.span.horizontal_default },
-            right_panel,
+            HorizontalSpan:new{ width = self:getGutter() },
+            controls,
         }
         self:buildLandscapeLayout(title_bar, content)
     else
-        local content = VerticalGroup:new{
-            align = "center",
-            board_frame,
-            VerticalSpan:new{ width = Size.span.vertical_large },
-            self.status_text,
-        }
-        self:buildPortraitLayout(title_bar, content, footer)
+        self:buildPortraitLayout(title_bar, board_frame,
+            VerticalGroup:new{ align = "center", controls, VerticalSpan:new{ width = self:getGutter() } })
     end
     self:updateStatus()
 end
@@ -248,7 +221,7 @@ function RippleEffectScreen:openSizeMenu()
         sizes[#sizes + 1] = { id = sz, text = sz .. "\xC3\x97" .. sz }
     end
     MenuHelper.openSizeMenu{
-        title     = _("Select grid size"),
+        title     = _("Select size"),
         sizes     = sizes,
         current   = self.plugin:getSetting("grid_n", RippleEffectBoard.DEFAULT_N),
         parent    = self,
@@ -286,9 +259,12 @@ function RippleEffectScreen:updateStatus(msg)
         local n     = self.board.n
         local diff  = self.plugin:getSetting("difficulty", "easy")
         local label = MenuHelper.DIFFICULTY_LABELS[diff] or diff
-        status = T(_("%1\xC3\x97%2 \xC2\xB7 %3 \xC2\xB7 Empty: %4"), n, n, label, empty)
+        status = self:joinStatus(T("%1×%2", n, n), label, T(_("Empty: %1"), empty))
     end
     ScreenBase.updateStatus(self, status)
+    -- Every move, hint, undo and reveal ends with a status update, so this
+    -- is where the bar learns that the round ended (or was undone).
+    self:refreshActionBar()
 end
 
 function RippleEffectScreen:getSizeButtonText()
@@ -299,7 +275,12 @@ end
 function RippleEffectScreen:getDiffButtonText()
     local diff  = self.plugin:getSetting("difficulty", "easy")
     local label = MenuHelper.DIFFICULTY_LABELS[diff] or diff
-    return T(_("Diff: %1"), label)
+    return T(_("Difficulty: %1"), label)
+end
+
+-- won is saved with the board; Reveal sets it too (a one-way end).
+function RippleEffectScreen:isRoundOver()
+    return self.board.won
 end
 
 return RippleEffectScreen

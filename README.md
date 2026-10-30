@@ -34,7 +34,7 @@ Fill every cell so that each outlined region of size N contains 1–N exactly on
 | Enter a number | Tap the digit button |
 | Erase a cell | Tap **Erase** |
 | Check progress | Tap **Check** |
-| New puzzle | Tap **New** |
+| New puzzle | Tap **New game** |
 | Show rules | Tap **Rules** |
 
 ## License

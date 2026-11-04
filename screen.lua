@@ -19,6 +19,7 @@ local T               = require("ffi/util").template
 
 local ScreenBase               = require("screen_base")
 local MenuHelper               = require("menu_helper")
+local GenProgress              = require("gen_progress")
 local RippleEffectBoard        = lrequire("board")
 local RippleEffectBoardWidget  = lrequire("board_widget")
 
@@ -51,9 +52,10 @@ local RippleEffectScreen = ScreenBase:extend{}
 function RippleEffectScreen:init()
     local state = self.plugin:loadState()
     local n     = self.plugin:getSetting("grid_n", RippleEffectBoard.DEFAULT_N)
-    self.board  = RippleEffectBoard:new{ n = n }
+    self.board  = RippleEffectBoard:new{ n = n, empty = true }
     if not self.board:load(state) then
-        self.board:generate(self.plugin:getSetting("difficulty", "easy"))
+        local diff = self.plugin:getSetting("difficulty", "easy")
+        GenProgress.run(function(on_progress) self.board:generate(diff, on_progress) end)
     end
     self.selected = nil
     ScreenBase.init(self)
@@ -208,8 +210,8 @@ end
 function RippleEffectScreen:onNewGame()
     local diff = self.plugin:getSetting("difficulty", "easy")
     local n    = self.plugin:getSetting("grid_n", RippleEffectBoard.DEFAULT_N)
-    self.board = RippleEffectBoard:new{ n = n }
-    self.board:generate(diff)
+    self.board = RippleEffectBoard:new{ n = n, empty = true }
+    GenProgress.run(function(on_progress) self.board:generate(diff, on_progress) end)
     self.selected = nil
     self.plugin:saveState(self.board:serialize())
     self:buildLayout()

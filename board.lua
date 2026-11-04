@@ -39,23 +39,22 @@ end
 
 -- Build rooms AND assign their values in the same pass instead of
 -- generating a blind random room layout and hoping a separate solve() can
--- fill it: each new room is grown one cell at a time, immediately assigning
--- the next value (1, 2, 3, ...) and checking it against every value already
--- placed on the board. A room simply stops growing early if no neighbouring
--- cell can validly take the next value, rather than committing to a shape
--- that might turn out to be globally unsatisfiable. (The old generate-then-
--- solve approach had to prove a full random layout infeasible before
--- retrying — empirically needing many thousands of attempts at n=6/7, worse
--- than the room count could realistically be retried; checking validity
--- while growing avoids ever building a room around a bad guess.)
+-- fill it (the old generate-then-solve approach had to prove a full random
+-- layout infeasible before retrying -- empirically needing many thousands
+-- of attempts at n=6/7). Each new room first grows its shape over free
+-- cells, then looks for an order of 1..size that fits the values already on
+-- the board, dropping its last cell until one does. Cells left over are
+-- patched in a repair pass: join an adjacent room (its values re-ordered to
+-- fit), or become a size-1 room.
 --
--- Cells that end up with no room after the main growth pass (their
--- neighbours all filled up first) are patched up in a final repair pass:
--- try extending an adjacent room by one more value, or start a fresh
--- size-1 room. Returns nil if even that isn't possible for some cell, so
--- the caller can just retry with a fresh random order — each attempt is
--- cheap since there's no backtracking search involved.
+-- When the repair pass gets stuck, only the rooms around the stuck cell are
+-- cleared and that patch is rebuilt, up to LOCAL_RETRIES times before the
+-- caller starts a whole new board. The old builder restarted the whole
+-- board every time and needed ~30000 restarts per 7x7 board (seconds on a
+-- desktop, over a minute on a Kobo, and a static fallback board in ~8% of
+-- games); now a few restarts at most.
 local ROOM_SIZE_WEIGHTS = { 1, 1, 2, 2, 2, 3, 3, 4 }
+local LOCAL_RETRIES = 150
 
 local function tryGenerateRoomsAndValues(n)
     local grid    = emptyGrid(n, n, 0)
@@ -63,86 +62,159 @@ local function tryGenerateRoomsAndValues(n)
     local rooms   = {}
     local next_room = 0
 
+    -- Gives the cells of `shape` the values 1..#shape in some order that
+    -- passes the separation rule against the values already on the board
+    -- (plain backtracking, values tried in increasing order; at most 4!
+    -- orders). Leaves the shape's cells at 0 when no order fits.
+    local function assignValues(shape)
+        local k = #shape
+        local used = {}
+        local function place(i)
+            if i > k then return true end
+            local rc = shape[i]
+            for v = 1, k do
+                if not used[v] and isValidGlobal(grid, n, rc[1], rc[2], v) then
+                    used[v] = true
+                    grid[rc[1]][rc[2]] = v
+                    if place(i + 1) then return true end
+                    grid[rc[1]][rc[2]] = 0
+                    used[v] = false
+                end
+            end
+            return false
+        end
+        return place(1)
+    end
+
+    local function growRoom(r, c)
+        local target = ROOM_SIZE_WEIGHTS[math.random(#ROOM_SIZE_WEIGHTS)]
+        local shape, in_shape = { {r, c} }, { [r * 100 + c] = true }
+        while #shape < target do
+            local candidates = {}
+            for _, rc in ipairs(shape) do
+                for _, d in ipairs(DIR4) do
+                    local nr, nc = rc[1] + d[1], rc[2] + d[2]
+                    if inBounds(nr, nc, n) and room_id[nr][nc] == 0
+                            and not in_shape[nr * 100 + nc] then
+                        candidates[#candidates + 1] = {nr, nc}
+                    end
+                end
+            end
+            if #candidates == 0 then break end
+            local pick = candidates[math.random(#candidates)]
+            shape[#shape + 1] = pick
+            in_shape[pick[1] * 100 + pick[2]] = true
+        end
+
+        while #shape > 0 and not assignValues(shape) do
+            shape[#shape] = nil
+        end
+        if #shape > 0 then
+            next_room = next_room + 1
+            for _, rc in ipairs(shape) do room_id[rc[1]][rc[2]] = next_room end
+            rooms[next_room] = { cells = shape, size = #shape }
+        end
+    end
+
+    -- Repair: (r, c) joins an adjacent room, re-ordering that room's values
+    -- so the new cell fits, or becomes a size-1 room. False if neither.
+    local function patchCell(r, c)
+        local tried = {}
+        for _, d in ipairs(DIR4) do
+            local nr, nc = r + d[1], c + d[2]
+            local id = inBounds(nr, nc, n) and room_id[nr][nc] or 0
+            if id > 0 and not tried[id] and rooms[id].size < MAX_ROOM then
+                tried[id] = true
+                local room = rooms[id]
+                local saved = {}
+                for i, rc in ipairs(room.cells) do
+                    saved[i] = grid[rc[1]][rc[2]]
+                    grid[rc[1]][rc[2]] = 0
+                end
+                local shape = {}
+                for i, rc in ipairs(room.cells) do shape[i] = rc end
+                shape[#shape + 1] = {r, c}
+                if assignValues(shape) then
+                    room.cells = shape
+                    room.size  = #shape
+                    room_id[r][c] = id
+                    return true
+                end
+                for i, rc in ipairs(room.cells) do grid[rc[1]][rc[2]] = saved[i] end
+            end
+        end
+        if isValidGlobal(grid, n, r, c, 1) then
+            next_room = next_room + 1
+            room_id[r][c] = next_room
+            grid[r][c]    = 1
+            rooms[next_room] = { cells = {{r, c}}, size = 1 }
+            return true
+        end
+        return false
+    end
+
+    -- Grows rooms from the free cells of `order`, then patches what is
+    -- left. Returns the cell it got stuck on, or nil when the board is full.
+    local function fill(order)
+        for _, cell in ipairs(order) do
+            if room_id[cell[1]][cell[2]] == 0 then growRoom(cell[1], cell[2]) end
+        end
+        for r = 1, n do
+            for c = 1, n do
+                if room_id[r][c] == 0 and not patchCell(r, c) then return r, c end
+            end
+        end
+    end
+
     local all_cells = {}
     for r = 1, n do
         for c = 1, n do all_cells[#all_cells + 1] = {r, c} end
     end
     shuffle(all_cells)
 
-    for _, cell in ipairs(all_cells) do
-        local r, c = cell[1], cell[2]
-        if room_id[r][c] == 0 and isValidGlobal(grid, n, r, c, 1) then
-            next_room = next_room + 1
-            local id = next_room
-            room_id[r][c] = id
-            grid[r][c]    = 1
-            local room = { cells = {{r, c}}, size = 1 }
-            rooms[id] = room
-
-            local target = ROOM_SIZE_WEIGHTS[math.random(#ROOM_SIZE_WEIGHTS)]
-            while room.size < target do
-                local candidates = {}
-                for _, rc in ipairs(room.cells) do
-                    for _, d in ipairs(DIR4) do
-                        local nr, nc = rc[1] + d[1], rc[2] + d[2]
-                        if inBounds(nr, nc, n) and room_id[nr][nc] == 0 then
-                            local next_v = room.size + 1
-                            if isValidGlobal(grid, n, nr, nc, next_v) then
-                                candidates[#candidates + 1] = {nr, nc}
-                            end
-                        end
+    local sr, sc = fill(all_cells)
+    local retries = 0
+    while sr do
+        retries = retries + 1
+        if retries > LOCAL_RETRIES then return nil end
+        -- Clear every room that touches the stuck cell's 3x3 block, then
+        -- rebuild the free patch in a fresh random order.
+        for dr = -1, 1 do
+            for dc = -1, 1 do
+                local r, c = sr + dr, sc + dc
+                local id = inBounds(r, c, n) and room_id[r][c] or 0
+                if id > 0 then
+                    for _, rc in ipairs(rooms[id].cells) do
+                        room_id[rc[1]][rc[2]] = 0
+                        grid[rc[1]][rc[2]]    = 0
                     end
+                    rooms[id] = nil
                 end
-                if #candidates == 0 then break end
-                local pick = candidates[math.random(#candidates)]
-                room.size = room.size + 1
-                room_id[pick[1]][pick[2]] = id
-                grid[pick[1]][pick[2]]    = room.size
-                room.cells[#room.cells + 1] = pick
             end
         end
+        local free = {}
+        for r = 1, n do
+            for c = 1, n do
+                if room_id[r][c] == 0 then free[#free + 1] = {r, c} end
+            end
+        end
+        shuffle(free)
+        sr, sc = fill(free)
     end
 
-    -- Repair pass: patch up any cells the main pass never reached.
+    -- Renumber the surviving rooms 1..k in board order.
+    local renum, out = {}, {}
     for r = 1, n do
         for c = 1, n do
-            if room_id[r][c] == 0 then
-                local joined, adj_ids = false, {}
-                for _, d in ipairs(DIR4) do
-                    local nr, nc = r + d[1], c + d[2]
-                    if inBounds(nr, nc, n) and room_id[nr][nc] > 0 then
-                        adj_ids[room_id[nr][nc]] = true
-                    end
-                end
-                for id in pairs(adj_ids) do
-                    local room = rooms[id]
-                    if room.size < MAX_ROOM then
-                        local next_v = room.size + 1
-                        if isValidGlobal(grid, n, r, c, next_v) then
-                            room.size = next_v
-                            room_id[r][c] = id
-                            grid[r][c]    = next_v
-                            room.cells[#room.cells + 1] = {r, c}
-                            joined = true
-                            break
-                        end
-                    end
-                end
-                if not joined then
-                    if isValidGlobal(grid, n, r, c, 1) then
-                        next_room = next_room + 1
-                        room_id[r][c] = next_room
-                        grid[r][c]    = 1
-                        rooms[next_room] = { cells = {{r, c}}, size = 1 }
-                    else
-                        return nil
-                    end
-                end
+            local id = room_id[r][c]
+            if not renum[id] then
+                out[#out + 1] = rooms[id]
+                renum[id] = #out
             end
+            room_id[r][c] = renum[id]
         end
     end
-
-    return grid, room_id, rooms
+    return grid, room_id, out
 end
 
 -- ---------------------------------------------------------------------------
@@ -258,7 +330,7 @@ local function countSolutions(puzzle, room_id, rooms, n, limit, node_budget)
     return solutions, exhausted
 end
 
-local function removeClues(solution, room_id, rooms, n, difficulty)
+local function removeClues(solution, room_id, rooms, n, difficulty, on_progress)
     local keep_ratio
     if     difficulty == "easy"   then keep_ratio = 0.55
     elseif difficulty == "hard"   then keep_ratio = 0.25
@@ -286,8 +358,9 @@ local function removeClues(solution, room_id, rooms, n, difficulty)
     local total      = n * n
     local target_remove = total - math.floor(total * keep_ratio)
     local removed = 0
-    for _, cell in ipairs(removable) do
+    for i, cell in ipairs(removable) do
         if removed >= target_remove then break end
+        if on_progress then on_progress(i / #removable) end
         local r, c = cell[1], cell[2]
         local saved = puzzle[r][c]
         puzzle[r][c] = 0
@@ -305,10 +378,11 @@ end
 -- Static fallback boards
 -- ---------------------------------------------------------------------------
 
--- tryGenerateRoomsAndValues occasionally exhausts MAX_ATTEMPTS without
--- completing a full room layout -- measured empirically at roughly 1 success
--- per ~30000 attempts at n=7, so a ~8% chance of exhausting a 100000-attempt
--- budget isn't a fluke. The previous fallback built an all-1s grid of
+-- Before 1.5.0, tryGenerateRoomsAndValues could exhaust MAX_ATTEMPTS
+-- without completing a full room layout -- measured empirically at roughly
+-- 1 success per ~30000 attempts at n=7, a ~8% chance of exhausting a
+-- 100000-attempt budget. With the local repairs it now needs a handful of
+-- attempts at most, so this is a pure safety net. The previous fallback built an all-1s grid of
 -- single-cell rooms, which VIOLATES the game's own separation rule (every
 -- adjacent same-value pair needs to be more than value cells apart, but
 -- distance 1 everywhere breaks that for value 1) and silently shrank the
@@ -418,25 +492,30 @@ function RippleEffectBoard:new(opts)
         won        = false,
         undo       = UndoStack:new{ max_size = 500 },
     }, self)
-    obj:generate()
+    -- opts.empty: the caller loads a save or generates right after, so
+    -- skip the throwaway puzzle.
+    if not opts.empty then obj:generate() end
     return obj
 end
 
-function RippleEffectBoard:generate(diff)
+-- on_progress (optional): called with a 0..1 fraction as it goes.
+function RippleEffectBoard:generate(diff, on_progress)
     self.difficulty = diff or self.difficulty
     local n = self.n
-    -- Each attempt is a cheap constructive build (no backtracking search),
-    -- so this can afford to be a large budget: measured 0/30 fallback at
-    -- n=7 (the hardest supported size) with this cap, worst case ~8s.
-    local MAX_ATTEMPTS = 100000
+    -- Each attempt is a constructive build with local repairs (no search
+    -- over the whole board): measured at n=7 (the hardest supported size)
+    -- over 2000 seeds, at most 12 attempts.
+    local MAX_ATTEMPTS = 2000
 
     for attempt = 1, MAX_ATTEMPTS do
+        if on_progress then on_progress(0.5 * (1 - 1 / attempt)) end
         local grid, room_id, rooms = tryGenerateRoomsAndValues(n)
         if grid then
             self.room_id  = room_id
             self.rooms    = rooms
             self.solution = grid
-            self.puzzle   = removeClues(grid, room_id, rooms, n, self.difficulty)
+            self.puzzle   = removeClues(grid, room_id, rooms, n, self.difficulty,
+                on_progress and function(f) on_progress(0.5 + 0.5 * f) end)
             self.user     = emptyGrid(n, n, 0)
             self.wrong    = emptyGrid(n, n, false)
             for r = 1, n do

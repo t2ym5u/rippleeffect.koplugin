@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-11-04
+
+### Changed
+- Much faster 7×7 puzzles: up to 4.8 s on a desktop (about 2 minutes on a
+  Kobo) down to under 0.1 s; 6×6 from 0.08 s to 0.04 s. The room builder
+  rebuilds just the rooms around a cell it got stuck on instead of starting
+  the whole grid over (about 30,000 restarts per 7×7 grid), so 7×7 no
+  longer falls back to one of a few fixed grids (about 1 game in 12 did).
+  Puzzles are new, with the same look.
+- Opening the game no longer builds a puzzle it then throws away, and New
+  game builds one puzzle instead of two.
+- A "Generating puzzle…" progress bar shows when a puzzle takes more than a
+  moment. Needs game-common 1.12.0.
+
 ## [1.4.3] - 2026-11-03
 
 ### Changed

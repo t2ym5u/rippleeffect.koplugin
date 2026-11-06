@@ -8,12 +8,12 @@ A Ripple Effect puzzle plugin for [KOReader](https://github.com/koreader/koreade
 
 ## Rules
 
-Fill every cell so that each outlined region of size N contains 1–N exactly once. Additionally, if the same number appears twice in the same row or column, those two cells must be at least that number of cells apart (the "ripple" constraint).
+Fill every cell so that each outlined region of size N contains 1–N exactly once. Additionally, if the same number appears twice in the same row or column, there must be at least that many cells between them (two 3s need three cells in between: the "ripple" constraint).
 
 ## Features
 
 - **Multiple grid sizes**
-- **Three difficulty levels** — Easy, Medium, Hard
+- **Three difficulty levels** — Easy needs only the basic rules (equal digits never touch); Medium adds the long reach of 2s, 3s and 4s along rows and columns; Hard shows almost no digits and needs many more of those steps. Every puzzle has a single solution and can be solved by logic alone, without guessing
 - **Region highlighting** — outlined regions are clearly shown
 - **Check** — highlights rule violations
 - **Hint** — two taps: the first says which cell is about to give, the second acts on it. A cell that contradicts the solution is always reported before a fresh one is revealed

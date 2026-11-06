@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.0] - 2026-11-05
+
+### Changed
+- Difficulty levels now really differ, and no puzzle needs guessing.
+  Before, levels only showed fewer digits, and digging only checked that
+  the answer stayed unique: every level called for the same kinds of
+  steps, and a few puzzles (7×7 Hard: 3%, 5×5 Hard: 2%) could only be
+  finished by trial and error. Each puzzle is now graded by a human-style
+  solver:
+  - Easy: the basic rules only (a placed digit rules itself out of its
+    room and of the cells touching it; a cell with one digit left, or a
+    digit with one place left in its room). About 40% of the cells shown.
+  - Medium: also needs the long reach of 2s, 3s and 4s (counting cells
+    along a row or column), and now and then a digit whose every place in
+    a room is within reach of the same outside cell. About a quarter of
+    the cells shown.
+  - Hard: almost no digits shown (often none) and many more of those
+    steps.
+- Puzzles differ from 1.5.x for the same seed (today's Daily Challenge
+  puzzle changes once after updating). Saved games still load.
+- Faster generation: the room layout builder does the same work in about
+  half the time (7×7 worst case over 50 seeds ~60 ms → ~28 ms on a
+  desktop). Same puzzles for the same seed.
+
 ## [1.5.2] - 2026-11-04
 
 ### Fixed
